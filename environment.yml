@@ -1,0 +1,16 @@
+name: churn-pred
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch
+  - torchvision
+  - cpuonly
+  - scikit-learn
+  - pandas
+  - numpy
+  - pip
+  - pip:
+      - imbalanced-learn
