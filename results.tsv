@@ -1,0 +1,13 @@
+commit	f1_churn	recall	auc_roc	kappa	model	description
+de563bb	0.618224	0.716578	0.834768	0.453145	XGBoost_baseline	baseline XGBoost, default params
+exp1_lgbm	0.612385	0.713904	0.829141	0.443736	LightGBM	discard — is_unbalance, 500 est, below XGB
+exp2_catboost	0.600760	0.633690	0.838585	0.446093	CatBoost	discard — scale_pos_weight, worst of three
+exp3_xgb_tuned	0.613909	0.684492	0.831537	0.454051	XGBoost_tuned	discard — over-regularized, baseline was better
+2fcea7a	0.623786	0.687166	0.840187	0.470183	LightGBM_dart	keep — DART+scale_pos_weight, best kappa so far
+exp5_stack	0.615190	0.649733	0.839886	0.465877	Stacking	discard — XGB+LGBM+LR meta, below LGBM DART alone
+e59651c	0.627545	0.700535	0.846365	0.473120	XGBoost_early_stop	keep — NEW BEST, 48 trees, aucpr metric, early stopping
+151292a	0.629847	0.716578	0.847544	0.473045	XGBoost_es_v2	keep — NEW BEST F1, 187 trees, depth=4 LR=0.02
+57d0172	0.634085	0.676471	0.847379	0.490321	XGBoost_es_v3	keep — NEW BEST, 377 trees LR=0.01, beats ANN
+exp9_xgb_v4	0.630824	0.705882	0.847760	0.477339	XGBoost_es_v4	discard — LR=0.005 reversed, sweet spot was LR=0.01
+exp10_retrain	0.628285	0.671123	0.846900	0.482018	XGBoost_full_retrain	discard — train+val combined, F1 dropped vs early stopping on val
+exp11_feat	0.621749	0.703209	0.845173	0.462571	XGBoost_feat_eng	discard — feature eng hurt, XGB captures interactions itself
