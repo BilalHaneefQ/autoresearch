@@ -20,14 +20,14 @@ MODEL_DIR = os.path.join(REPO_ROOT, 'saved_models')
 METRICS_F = os.path.join(REPO_ROOT, 'metrics.jsonl')
 os.makedirs(CM_DIR, exist_ok=True); os.makedirs(MODEL_DIR, exist_ok=True)
 
-MODEL_NAME = 'XGBoost_es_v2'
+MODEL_NAME = 'XGBoost_es_v3'
 
 def build_model():
     pos_neg_ratio = (1 - 0.265) / 0.265
     return XGBClassifier(
-        n_estimators          = 2000,
+        n_estimators          = 5000,
         max_depth             = 4,
-        learning_rate         = 0.02,
+        learning_rate         = 0.01,
         subsample             = 0.75,
         colsample_bytree      = 0.75,
         colsample_bylevel     = 0.75,
@@ -36,7 +36,7 @@ def build_model():
         reg_alpha             = 0.05,
         scale_pos_weight      = pos_neg_ratio,
         eval_metric           = 'aucpr',
-        early_stopping_rounds = 80,
+        early_stopping_rounds = 100,
         random_state          = SEED,
         n_jobs                = -1,
     )
