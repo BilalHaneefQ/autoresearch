@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from sklearn.metrics import f1_score, recall_score, roc_auc_score, accuracy_score, confusion_matrix, cohen_kappa_score
-from lightgbm import LGBMClassifier
+from xgboost import XGBClassifier
 from prepare import load_data, SEED
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -20,25 +20,22 @@ MODEL_DIR = os.path.join(REPO_ROOT, 'saved_models')
 METRICS_F = os.path.join(REPO_ROOT, 'metrics.jsonl')
 os.makedirs(CM_DIR, exist_ok=True); os.makedirs(MODEL_DIR, exist_ok=True)
 
-MODEL_NAME = 'LightGBM_tuned'
+MODEL_NAME = 'XGBoost_early_stop'
 
 def build_model():
     pos_neg_ratio = (1 - 0.265) / 0.265
-    return LGBMClassifier(
-        boosting_type    = 'dart',
-        n_estimators     = 500,
-        max_depth        = 7,
-        learning_rate    = 0.05,
-        num_leaves       = 50,
+    return XGBClassifier(
+        n_estimators     = 2000,
+        max_depth        = 5,
+        learning_rate    = 0.03,
         subsample        = 0.8,
         colsample_bytree = 0.8,
-        min_child_samples= 20,
-        reg_alpha        = 0.1,
-        reg_lambda       = 1.0,
+        min_child_weight = 5,
         scale_pos_weight = pos_neg_ratio,
+        eval_metric      = 'aucpr',   # area under precision-recall — better for imbalanced
+        early_stopping_rounds = 50,
         random_state     = SEED,
         n_jobs           = -1,
-        verbose          = -1,
     )
 
 def find_best_threshold(probs, y_val):
@@ -61,7 +58,10 @@ def save_cm(cm, metrics, commit, timestamp):
 def run():
     X_train, X_val, X_test, y_train, y_val, y_test, _ = load_data()
     model = build_model()
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train,
+              eval_set=[(X_val, y_val)],
+              verbose=False)
+    print(f"Best iteration: {model.best_iteration}")
     best_thresh = find_best_threshold(model.predict_proba(X_val)[:,1], y_val)
     test_probs  = model.predict_proba(X_test)[:,1]
     test_preds  = (test_probs >= best_thresh).astype(int)
