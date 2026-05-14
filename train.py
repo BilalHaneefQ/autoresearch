@@ -20,22 +20,25 @@ MODEL_DIR = os.path.join(REPO_ROOT, 'saved_models')
 METRICS_F = os.path.join(REPO_ROOT, 'metrics.jsonl')
 os.makedirs(CM_DIR, exist_ok=True); os.makedirs(MODEL_DIR, exist_ok=True)
 
-MODEL_NAME = 'XGBoost_early_stop'
+MODEL_NAME = 'XGBoost_es_v2'
 
 def build_model():
     pos_neg_ratio = (1 - 0.265) / 0.265
     return XGBClassifier(
-        n_estimators     = 2000,
-        max_depth        = 5,
-        learning_rate    = 0.03,
-        subsample        = 0.8,
-        colsample_bytree = 0.8,
-        min_child_weight = 5,
-        scale_pos_weight = pos_neg_ratio,
-        eval_metric      = 'aucpr',   # area under precision-recall — better for imbalanced
-        early_stopping_rounds = 50,
-        random_state     = SEED,
-        n_jobs           = -1,
+        n_estimators          = 2000,
+        max_depth             = 4,
+        learning_rate         = 0.02,
+        subsample             = 0.75,
+        colsample_bytree      = 0.75,
+        colsample_bylevel     = 0.75,
+        min_child_weight      = 7,
+        gamma                 = 0.05,
+        reg_alpha             = 0.05,
+        scale_pos_weight      = pos_neg_ratio,
+        eval_metric           = 'aucpr',
+        early_stopping_rounds = 80,
+        random_state          = SEED,
+        n_jobs                = -1,
     )
 
 def find_best_threshold(probs, y_val):
@@ -58,9 +61,7 @@ def save_cm(cm, metrics, commit, timestamp):
 def run():
     X_train, X_val, X_test, y_train, y_val, y_test, _ = load_data()
     model = build_model()
-    model.fit(X_train, y_train,
-              eval_set=[(X_val, y_val)],
-              verbose=False)
+    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
     print(f"Best iteration: {model.best_iteration}")
     best_thresh = find_best_threshold(model.predict_proba(X_val)[:,1], y_val)
     test_probs  = model.predict_proba(X_test)[:,1]
