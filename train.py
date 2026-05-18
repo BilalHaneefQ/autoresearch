@@ -1,101 +1,110 @@
 """
-Churn prediction — Boosting models.
+House price regression — the only file the agent modifies.
 Usage: conda run -n churn-pred python train.py
+
+Outputs saved to repo root:
+  prediction_plots/  — actual vs predicted scatter plots
+  saved_models/      — serialized models (.pkl)
+  metrics.jsonl      — one line per run
 """
 
 import json, os, subprocess
 from datetime import datetime
+
 import joblib
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
-from sklearn.metrics import f1_score, recall_score, roc_auc_score, accuracy_score, confusion_matrix, cohen_kappa_score
-from xgboost import XGBClassifier
-from prepare import load_data, SEED
+from sklearn.linear_model import Ridge
+from sklearn.metrics import r2_score
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
-CM_DIR    = os.path.join(REPO_ROOT, 'confusion_matrices')
-MODEL_DIR = os.path.join(REPO_ROOT, 'saved_models')
-METRICS_F = os.path.join(REPO_ROOT, 'metrics.jsonl')
-os.makedirs(CM_DIR, exist_ok=True); os.makedirs(MODEL_DIR, exist_ok=True)
+from prepare import load_data, evaluate_model, SEED
 
-MODEL_NAME = 'XGBoost_es_v3'
+REPO_ROOT  = os.path.dirname(os.path.abspath(__file__))
+PLOT_DIR   = os.path.join(REPO_ROOT, 'prediction_plots')
+MODEL_DIR  = os.path.join(REPO_ROOT, 'saved_models')
+METRICS_F  = os.path.join(REPO_ROOT, 'metrics.jsonl')
+os.makedirs(PLOT_DIR,  exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Model — modify this and everything below it
+# ---------------------------------------------------------------------------
+
+MODEL_NAME = 'Ridge_baseline'
 
 def build_model():
-    pos_neg_ratio = (1 - 0.265) / 0.265
-    return XGBClassifier(
-        n_estimators          = 5000,
-        max_depth             = 4,
-        learning_rate         = 0.01,
-        subsample             = 0.75,
-        colsample_bytree      = 0.75,
-        colsample_bylevel     = 0.75,
-        min_child_weight      = 7,
-        gamma                 = 0.05,
-        reg_alpha             = 0.05,
-        scale_pos_weight      = pos_neg_ratio,
-        eval_metric           = 'aucpr',
-        early_stopping_rounds = 100,
-        random_state          = SEED,
-        n_jobs                = -1,
-    )
+    """
+    Return an untrained sklearn-compatible model.
+    Swap for RandomForestRegressor, XGBRegressor, LGBMRegressor,
+    GradientBoostingRegressor, MLPRegressor, etc.
+    """
+    return Ridge(alpha=1.0, random_state=SEED)
 
-def find_best_threshold(probs, y_val):
-    best_thresh, best_f1 = 0.5, 0.0
-    for t in np.arange(0.30, 0.70, 0.01):
-        f = f1_score(y_val.astype(int), (probs >= t).astype(int), zero_division=0)
-        if f > best_f1: best_f1, best_thresh = f, t
-    return best_thresh
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-def save_cm(cm, metrics, commit, timestamp):
-    cm_path = os.path.join(CM_DIR, f'cm_{MODEL_NAME}_{commit}_{timestamp}.png')
-    fig, ax = plt.subplots(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
-                xticklabels=['No Churn','Churn'], yticklabels=['No Churn','Churn'], annot_kws={'size':14})
-    ax.set_xlabel('Predicted', fontsize=12); ax.set_ylabel('Actual', fontsize=12)
-    ax.set_title(f'{MODEL_NAME} | commit={commit}\nF1={metrics["f1_churn"]:.4f}  Recall={metrics["recall"]:.4f}  AUC={metrics["auc_roc"]:.4f}  κ={metrics["kappa"]:.4f}', fontsize=10)
-    plt.tight_layout(); plt.savefig(cm_path, dpi=120); plt.close(fig)
-    return cm_path
+def save_plot(y_true_log, y_pred_log, metrics, commit, timestamp):
+    """Actual vs predicted scatter plot in USD scale."""
+    y_true = np.expm1(y_true_log)
+    y_pred = np.expm1(np.clip(y_pred_log, 0, None))
+    path   = os.path.join(PLOT_DIR, f'pred_{MODEL_NAME}_{commit}_{timestamp}.png')
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    ax.scatter(y_true / 1e6, y_pred / 1e6, alpha=0.3, s=15, color='steelblue')
+    lim = max(y_true.max(), y_pred.max()) / 1e6 * 1.05
+    ax.plot([0, lim], [0, lim], 'r--', lw=1.5, label='Perfect prediction')
+    ax.set_xlabel('Actual Price ($M)', fontsize=12)
+    ax.set_ylabel('Predicted Price ($M)', fontsize=12)
+    ax.set_title(
+        f'{MODEL_NAME} | commit={commit}\n'
+        f'RMSE=${metrics["rmse"]/1e3:.1f}K  R²={metrics["r2"]:.4f}  MAE=${metrics["mae"]/1e3:.1f}K',
+        fontsize=10)
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(path, dpi=120)
+    plt.close(fig)
+    return path
+
+# ---------------------------------------------------------------------------
+# Run
+# ---------------------------------------------------------------------------
 
 def run():
     X_train, X_val, X_test, y_train, y_val, y_test, _ = load_data()
+
     model = build_model()
-    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
-    print(f"Best iteration: {model.best_iteration}")
-    best_thresh = find_best_threshold(model.predict_proba(X_val)[:,1], y_val)
-    test_probs  = model.predict_proba(X_test)[:,1]
-    test_preds  = (test_probs >= best_thresh).astype(int)
-    labels      = y_test.astype(int)
-    metrics = {
-        'f1_churn': float(f1_score(labels, test_preds, zero_division=0)),
-        'recall':   float(recall_score(labels, test_preds, zero_division=0)),
-        'auc_roc':  float(roc_auc_score(labels, test_probs)),
-        'accuracy': float(accuracy_score(labels, test_preds)),
-        'kappa':    float(cohen_kappa_score(labels, test_preds)),
-        'threshold':float(best_thresh),
-    }
-    cm = confusion_matrix(labels, test_preds); tn,fp,fn,tp = cm.ravel()
+    model.fit(X_train, y_train)
+
+    y_pred_log = model.predict(X_test)
+    metrics    = evaluate_model(y_test, y_pred_log)
+
     try:    commit = subprocess.check_output(['git','rev-parse','--short','HEAD'],stderr=subprocess.DEVNULL).decode().strip()
     except: commit = 'unknown'
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    cm_path    = save_cm(cm, metrics, commit, ts)
-    model_path = os.path.join(MODEL_DIR, f'model_{MODEL_NAME}_{commit}_{ts}.pkl')
-    joblib.dump({'model':model,'threshold':best_thresh,'metrics':metrics}, model_path)
-    with open(METRICS_F,'a') as f:
-        f.write(json.dumps({'timestamp':datetime.now().isoformat(timespec='seconds'),'commit':commit,'model':MODEL_NAME,
-            'metrics':{k:round(v,6) for k,v in metrics.items()},
-            'confusion_matrix':{'TP':int(tp),'FP':int(fp),'FN':int(fn),'TN':int(tn),'image_path':cm_path}})+'\n')
-    print("---")
-    print(f"f1_churn:   {metrics['f1_churn']:.6f}")
-    print(f"recall:     {metrics['recall']:.6f}")
-    print(f"auc_roc:    {metrics['auc_roc']:.6f}")
-    print(f"accuracy:   {metrics['accuracy']:.6f}")
-    print(f"kappa:      {metrics['kappa']:.6f}")
-    print(f"threshold:  {metrics['threshold']:.2f}")
-    print(f"model:      {MODEL_NAME}")
-    print(f"TP={tp}  FP={fp}  FN={fn}  TN={tn}")
-    print(f"\nConfusion matrix → {cm_path}")
-    print(f"Model saved      → {model_path}")
 
-if __name__ == '__main__': run()
+    plot_path  = save_plot(y_test, y_pred_log, metrics, commit, ts)
+    model_path = os.path.join(MODEL_DIR, f'model_{MODEL_NAME}_{commit}_{ts}.pkl')
+    joblib.dump({'model': model, 'metrics': metrics}, model_path)
+
+    with open(METRICS_F, 'a') as f:
+        f.write(json.dumps({
+            'timestamp': datetime.now().isoformat(timespec='seconds'),
+            'commit': commit, 'model': MODEL_NAME,
+            'metrics': {k: round(v, 4) for k, v in metrics.items()},
+            'plot': plot_path,
+        }) + '\n')
+
+    print("---")
+    print(f"rmse:       ${metrics['rmse']:,.0f}")
+    print(f"r2:         {metrics['r2']:.6f}")
+    print(f"mae:        ${metrics['mae']:,.0f}")
+    print(f"model:      {MODEL_NAME}")
+    print(f"\nPlot saved  → {plot_path}")
+    print(f"Model saved → {model_path}")
+    print(f"Metrics     → {METRICS_F}")
+
+
+if __name__ == '__main__':
+    run()

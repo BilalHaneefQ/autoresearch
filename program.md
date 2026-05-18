@@ -1,112 +1,107 @@
-# autoresearch — Churn Prediction ANN
+# autoresearch — House Price Regression
 
-Autonomous research experiment: improve a customer churn prediction model by modifying `train.py`.
+Autonomous research experiment: improve house price prediction by modifying `train.py`.
 
 ## Setup
 
-1. **Agree on a run tag** based on today's date (e.g. `may14`). Branch `autoresearch/<tag>` must not exist.
+1. **Agree on a run tag** based on today's date (e.g. `may18`). Branch `autoresearch/<tag>` must not exist.
 2. **Create the branch**: `git checkout -b autoresearch/<tag>`
 3. **Activate the environment**: `conda activate churn-pred`
 4. **Read these files** for full context:
-   - `prepare.py` — fixed data pipeline, preprocessing, evaluation harness. **Do not modify.**
-   - `train.py` — the ANN model. **Only file you edit.**
+   - `prepare.py` — fixed data pipeline and evaluation harness. **Do not modify.**
+   - `train.py` — the model. **Only file you edit.**
 5. **Initialize results.tsv** with just the header row (leave untracked by git).
-6. **Confirm setup** and begin the experiment loop.
+6. **Confirm setup** and begin.
 
 ## The goal
 
-**Maximize `f1_churn`** — F1 Score on the churn class (label=1) against the fixed test set defined in `prepare.py`.
+**Minimize `rmse`** — Root Mean Squared Error in USD on the fixed test set.
 
-Secondary metric to watch: **`recall`** — catching churners is more valuable than avoiding false alarms.
+Secondary metric: **`r2`** (higher is better, max 1.0).
+
+**Baseline to beat:** Ridge regression (~$170K RMSE expected).
 
 ## Dataset context
 
-- **7,043 customers**, 20 features (demographics, services, billing)
-- **Class imbalance**: 73% No Churn, 27% Churn
-- `prepare.py` handles all preprocessing: label encoding, one-hot encoding, standard scaling, stratified splits
-- Fixed splits: 80% train (further split 85/15 train/val), 20% test — same every run
+- **4,600 King County (Seattle) house sales**
+- Features: bedrooms, bathrooms, sqft_living, sqft_lot, floors, waterfront, view, condition, sqft_above, sqft_basement, house_age, yrs_since_renov, city, zipcode
+- **Target**: `price` (USD) — log-transformed in pipeline to handle right skew
+- `prepare.py` handles all preprocessing: feature engineering, label encoding, StandardScaler, train/val/test splits
 
 ## What you CAN do
 
 - Modify `train.py` — everything is fair game:
-  - Model architecture (depth, width, activation functions, BatchNorm, Dropout, skip connections)
-  - Optimizer (Adam, AdamW, SGD, learning rate, weight decay, schedulers)
-  - Training loop (early stopping, gradient clipping, mixed precision)
-  - Loss function (BCEWithLogitsLoss pos_weight, focal loss, label smoothing)
-  - Data augmentation (SMOTE via imbalanced-learn, which is installed)
-  - Threshold tuning strategy
+  - Model: Ridge, Lasso, RandomForest, XGBRegressor, LGBMRegressor, GradientBoosting, ANN, etc.
+  - Hyperparameters: depth, n_estimators, learning rate, regularization
+  - Additional feature engineering (transform X_train/val/test inside train.py)
+  - Ensembling: average or stack multiple models
+  - Early stopping, cross-validation
 
 ## What you CANNOT do
 
-- Modify `prepare.py` — fixed data splits and evaluation harness
-- Change `SEED`, `TEST_SIZE`, `VAL_SIZE` in `prepare.py`
-- Add packages not in the conda environment (`conda activate churn-pred`)
+- Modify `prepare.py` — fixed splits and evaluation
+- Add packages not in the conda environment
 
 ## Output format
 
 ```
 ---
-f1_churn:   0.612345
-recall:     0.720000
-auc_roc:    0.840000
-accuracy:   0.810000
-threshold:  0.42
+rmse:       $152340
+r2:         0.821400
+mae:        $95200
+model:      XGBoost_baseline
 ```
 
 Extract the key metric:
 ```
-grep "^f1_churn:" run.log
+grep "^rmse:" run.log
 ```
+
+## File output (repo root)
+
+Every run saves to:
+- `prediction_plots/pred_<model>_<commit>_<timestamp>.png`
+- `saved_models/model_<model>_<commit>_<timestamp>.pkl`
+- Appends one line to `metrics.jsonl`
 
 ## Logging results
 
-Log to `results.tsv` (tab-separated, leave untracked by git):
+Log to `results.tsv` (tab-separated, leave untracked):
 
 ```
-commit	f1_churn	recall	auc_roc	description
-```
-
-Example:
-```
-commit	f1_churn	recall	auc_roc	description
-a1b2c3d	0.580000	0.690000	0.820000	baseline 3-layer MLP
-b2c3d4e	0.612000	0.720000	0.840000	add BatchNorm + Dropout 0.3
-c3d4e5f	0.598000	0.710000	0.835000	discard — worse than prev
-d4e5f6g	0.635000	0.750000	0.855000	deeper net + AdamW + LR scheduler
+commit	rmse	r2	mae	model	description
 ```
 
 ## The experiment loop
 
 LOOP FOREVER:
 
-1. Check git state: current branch and commit.
-2. Improve `train.py` with one experimental idea.
+1. Check git state.
+2. Improve `train.py` with one idea.
 3. `git commit`
 4. Run: `conda run -n churn-pred python train.py > run.log 2>&1`
-5. Read results: `grep "^f1_churn:\|^recall:" run.log`
-6. If grep is empty → crashed. `tail -n 50 run.log` to diagnose.
-7. Log to `results.tsv`.
-8. If `f1_churn` improved: keep the commit.
+5. Read: `grep "^rmse:\|^r2:" run.log`
+6. If crash: `tail -n 50 run.log`
+7. Log to `results.tsv`
+8. If `rmse` improved (lower): keep commit.
 9. If not: `git reset --hard HEAD~1`
 
 ## Suggested progression
 
-1. **Baseline** — run as-is to establish the floor (~0.58 f1_churn expected)
-2. **Add BatchNorm + Dropout** — biggest single improvement on tabular data
-3. **Deeper architecture** — 256 → 128 → 64 → 32 with residual connections
-4. **AdamW + ReduceLROnPlateau** — better optimizer + adaptive LR
-5. **Focal Loss** — specifically designed for class imbalance (replaces pos_weight)
-6. **SMOTE oversampling** — balance training set using imbalanced-learn
-7. **Threshold tuning** — find optimal cutoff per run (already implemented in prepare.py)
-8. **Ensemble / test-time augmentation** — average predictions from multiple checkpoints
+1. **Baseline** — Ridge regression (establish floor)
+2. **Random Forest** — non-linear, handles interactions
+3. **XGBoost / LightGBM** — typically best on tabular regression
+4. **Hyperparameter tuning** — tune the best model
+5. **Feature engineering** — price per sqft, log transforms of sqft features, etc.
+6. **Stacking** — blend best models
 
 ## Key tips
 
-- **pos_weight** in BCEWithLogitsLoss is already set correctly in the baseline — don't remove it
-- `find_best_threshold()` in `prepare.py` sweeps [0.30, 0.70] on the val set — always use it
-- Overfitting is the main risk on this small dataset (5K train samples) — Dropout is your friend
-- A model with f1_churn=0.65 and recall=0.80 is better than one with f1=0.70 and recall=0.55 for a business
+- Target is log1p-transformed — `evaluate_model()` converts back to USD for metrics
+- RMSE in USD: aim for < $120K (good), < $100K (great)
+- R² > 0.85 is solid for this dataset
+- Outliers (price > $5M) exist — robust models handle them better
 
 ## Never stop
 
-Loop indefinitely until manually interrupted. If you run out of ideas, revisit near-misses, try combining approaches, or research focal loss / class-balanced sampling papers.
+Loop until manually interrupted.

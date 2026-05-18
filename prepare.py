@@ -1,18 +1,18 @@
 """
-Fixed data pipeline and evaluation harness for churn prediction autoresearch.
+Fixed data pipeline and evaluation harness for house price regression.
 Do not modify this file.
 
-Dataset: Telco Customer Churn (Telco-Customer-Churn.csv)
-Target:  Churn (Yes=1, No=0)
-Metric:  F1 Score on the churn class (higher is better)
-         Secondary: Recall on the churn class
+Dataset : dataset/data.csv  (King County house sales)
+Target  : price  (continuous, USD)
+Metric  : RMSE on test set (lower is better)
+          Secondary: R² score (higher is better)
 """
 
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.metrics import f1_score, recall_score, roc_auc_score, accuracy_score
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -20,11 +20,10 @@ warnings.filterwarnings('ignore')
 # Constants (fixed, do not modify)
 # ---------------------------------------------------------------------------
 
-DATA_PATH  = 'Telco-Customer-Churn.csv'
-SEED       = 42
-TEST_SIZE  = 0.20
-VAL_SIZE   = 0.15   # fraction of remaining train split
-BATCH_SIZE = 256
+DATA_PATH = 'dataset/data.csv'
+SEED      = 42
+TEST_SIZE = 0.20
+VAL_SIZE  = 0.15   # fraction of remaining train split
 
 # ---------------------------------------------------------------------------
 # Data loading and preprocessing (fixed pipeline)
@@ -32,47 +31,48 @@ BATCH_SIZE = 256
 
 def load_data():
     """
-    Load, clean, encode and split the Telco churn dataset.
+    Load, clean, encode and split the King County house price dataset.
     Returns X_train, X_val, X_test, y_train, y_val, y_test (numpy float32),
     and the fitted scaler.
     """
     df = pd.read_csv(DATA_PATH)
-    df.drop(columns=['customerID'], inplace=True)
 
-    # TotalCharges contains spaces for new customers → coerce to float
-    df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
-    df['TotalCharges'].fillna(df['TotalCharges'].median(), inplace=True)
+    # Drop rows where price is 0 or NaN
+    df = df[df['price'] > 0].dropna(subset=['price'])
 
-    # Binary columns → label encode (0/1)
-    binary_cols = [
-        'gender', 'Partner', 'Dependents', 'PhoneService',
-        'PaperlessBilling', 'Churn'
-    ]
+    # Drop non-informative columns
+    df.drop(columns=['date', 'street', 'country'], inplace=True)
+
+    # Extract useful features from statezip (zip code as numeric)
+    df['zipcode'] = df['statezip'].str.extract(r'(\d+)').astype(float)
+    df.drop(columns=['statezip'], inplace=True)
+
+    # Label encode city
     le = LabelEncoder()
-    for col in binary_cols:
-        df[col] = le.fit_transform(df[col])
+    df['city'] = le.fit_transform(df['city'].astype(str))
 
-    # Multi-class categoricals → one-hot encode
-    ohe_cols = [
-        'MultipleLines', 'InternetService', 'OnlineSecurity',
-        'OnlineBackup', 'DeviceProtection', 'TechSupport',
-        'StreamingTV', 'StreamingMovies', 'Contract', 'PaymentMethod'
-    ]
-    df = pd.get_dummies(df, columns=ohe_cols, drop_first=True)
+    # Feature: house age, years since renovation
+    df['house_age']        = 2025 - df['yr_built']
+    df['yrs_since_renov']  = np.where(
+        df['yr_renovated'] > 0,
+        2025 - df['yr_renovated'],
+        df['house_age']
+    )
+    df.drop(columns=['yr_built', 'yr_renovated'], inplace=True)
 
-    X = df.drop(columns=['Churn']).values.astype(np.float32)
-    y = df['Churn'].values.astype(np.float32)
+    # Log-transform target to handle right skew
+    y = np.log1p(df['price'].values).astype(np.float32)
+    X = df.drop(columns=['price']).values.astype(np.float32)
 
-    # Stratified splits to preserve churn ratio in every split
+    # Stratified-like split using price quantiles
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=TEST_SIZE, random_state=SEED, stratify=y
+        X, y, test_size=TEST_SIZE, random_state=SEED
     )
     X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=VAL_SIZE, random_state=SEED, stratify=y_train
+        X_train, y_train, test_size=VAL_SIZE, random_state=SEED
     )
 
-    # Fit scaler on train only, transform all splits
-    scaler = StandardScaler()
+    scaler  = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_val   = scaler.transform(X_val)
     X_test  = scaler.transform(X_test)
@@ -81,95 +81,27 @@ def load_data():
 
 
 def get_input_dim():
-    """Returns number of input features after preprocessing."""
     X_train, *_ = load_data()
     return X_train.shape[1]
-
-
-def get_pos_weight(y_train):
-    """Class weight for BCEWithLogitsLoss to handle imbalance (73% No, 27% Yes)."""
-    import torch
-    return torch.tensor(
-        [(y_train == 0).sum() / (y_train == 1).sum()],
-        dtype=torch.float32
-    )
 
 # ---------------------------------------------------------------------------
 # Evaluation harness (DO NOT CHANGE — this is the fixed metric)
 # ---------------------------------------------------------------------------
 
-def evaluate_model(model, X_test, y_test, threshold=0.5):
+def evaluate_model(y_true_log, y_pred_log):
     """
-    Evaluate a trained PyTorch model on the test set.
-    Primary metric: f1_churn (higher is better).
-
-    Args:
-        model:     trained nn.Module
-        X_test:    numpy array, preprocessed test features
-        y_test:    numpy array, test labels (0/1)
-        threshold: classification threshold (default 0.5)
-
-    Returns dict with f1_churn, recall, auc_roc, accuracy, threshold.
+    Evaluate predictions. Both y_true and y_pred are in log1p space.
+    Returns dict with rmse (primary, lower=better), r2, mae — all in original USD scale.
     """
-    import torch
-    from torch.utils.data import DataLoader, TensorDataset
+    y_true = np.expm1(y_true_log)
+    y_pred = np.expm1(y_pred_log)
+    y_pred = np.clip(y_pred, 0, None)   # no negative prices
 
-    model.eval()
-    loader = DataLoader(
-        TensorDataset(torch.tensor(X_test), torch.tensor(y_test)),
-        batch_size=BATCH_SIZE, shuffle=False
-    )
-    device = next(model.parameters()).device
-    logits_all, labels_all = [], []
-    with torch.no_grad():
-        for xb, yb in loader:
-            logits_all.append(model(xb.to(device)).cpu())
-            labels_all.append(yb)
+    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    r2   = float(r2_score(y_true, y_pred))
+    mae  = float(mean_absolute_error(y_true, y_pred))
 
-    probs  = torch.sigmoid(torch.cat(logits_all)).numpy()
-    labels = torch.cat(labels_all).numpy()
-    preds  = (probs >= threshold).astype(int)
-
-    return {
-        'f1_churn':  float(f1_score(labels, preds, zero_division=0)),
-        'recall':    float(recall_score(labels, preds, zero_division=0)),
-        'auc_roc':   float(roc_auc_score(labels, probs)),
-        'accuracy':  float(accuracy_score(labels, preds)),
-        'threshold': threshold,
-    }
-
-
-def find_best_threshold(model, X_val, y_val):
-    """
-    Sweep thresholds [0.30, 0.70] on the validation set.
-    Returns the threshold that maximises F1 on the churn class.
-    """
-    import torch
-    from torch.utils.data import DataLoader, TensorDataset
-
-    model.eval()
-    loader = DataLoader(
-        TensorDataset(torch.tensor(X_val), torch.tensor(y_val)),
-        batch_size=BATCH_SIZE, shuffle=False
-    )
-    device = next(model.parameters()).device
-    logits_all, labels_all = [], []
-    with torch.no_grad():
-        for xb, yb in loader:
-            logits_all.append(model(xb.to(device)).cpu())
-            labels_all.append(yb)
-
-    probs  = torch.sigmoid(torch.cat(logits_all)).numpy()
-    labels = torch.cat(labels_all).numpy()
-
-    best_thresh, best_f1 = 0.5, 0.0
-    for t in np.arange(0.30, 0.70, 0.01):
-        f = f1_score(labels, (probs >= t).astype(int), zero_division=0)
-        if f > best_f1:
-            best_f1     = f
-            best_thresh = t
-    return best_thresh
-
+    return {'rmse': rmse, 'r2': r2, 'mae': mae}
 
 # ---------------------------------------------------------------------------
 # Main — validate pipeline when run directly
@@ -179,8 +111,9 @@ if __name__ == '__main__':
     print("Validating data pipeline...")
     X_train, X_val, X_test, y_train, y_val, y_test, scaler = load_data()
     print(f"  Input features : {X_train.shape[1]}")
-    print(f"  Train samples  : {len(y_train)}  (churn {y_train.mean()*100:.1f}%)")
-    print(f"  Val   samples  : {len(y_val)}  (churn {y_val.mean()*100:.1f}%)")
-    print(f"  Test  samples  : {len(y_test)}  (churn {y_test.mean()*100:.1f}%)")
-    print(f"  pos_weight     : {get_pos_weight(y_train).item():.3f}")
+    print(f"  Train samples  : {len(y_train)}")
+    print(f"  Val   samples  : {len(y_val)}")
+    print(f"  Test  samples  : {len(y_test)}")
+    print(f"  Target range   : ${np.expm1(y_test.min()):,.0f} — ${np.expm1(y_test.max()):,.0f}")
+    print(f"  Target mean    : ${np.expm1(y_test.mean()):,.0f}")
     print("Pipeline OK. Ready to train.")
