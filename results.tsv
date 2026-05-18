@@ -1,0 +1,18 @@
+commit	rmse	r2	mae	model	description
+37e091b	1606506	-16.35	215805	Ridge_baseline	baseline — linear model can't handle price outliers
+fcf5016	224508	0.661198	105926	XGBoost_baseline	keep — depth=6 LR=0.01, 1199 trees
+534ea3d	223158	0.665260	104777	XGBoost_feat_eng	keep — +8 features, marginal gain
+066c9cf	219370	0.676526	106744	LightGBM_tuned	keep — depth=8, LR=0.005, feat_eng, new best
+exp4_dart	470087	-0.485	350092	LightGBM_dart	discard — DART+early_stopping incompatible, best_iter=0
+adb1a8f	212126	0.697538	105232	LightGBM_rich_feat	keep — 27 features, 127 leaves, NEW BEST
+2a26b41	206140	0.714368	100130	Stacking_LGBM_XGB	keep — stacking beats single models, NEW BEST
+a3470eb	205393	0.716435	99940	Stacking_4model	keep — LGBM+XGB+RF+ET, marginal gain over 2-model
+exp8_6model	205928	0.714955	96565	Stacking_6model	discard — more models didn't help R², 4-model still best
+exp9_lgbm_meta	206572	0.713167	100340	Stacking_LGBM_meta	discard — LGBM meta overfits, Ridge still better
+exp10_blend	220620	0.672829	104889	WeightedBlend	discard — weight search overfit to val set
+exp11_target	213632	0.693229	101001	Stack_TargetEnc	discard — scaled cols break target encoding grouping
+2263a9f	187692	0.763204	93083	Stack_ProperTargetEnc	keep — NEW BEST, proper city+zip target enc, broke 0.72 ceiling
+exp13_v2	190790	0.755322	93975	Stack_TargetEnc_v2	discard — extra features hurt, exp12 better
+e8e005d	186010	0.767429	92495	Stack_TargetEnc_tuned	keep — NEW BEST, 255-leaf LGBM+XGB depth=7
+exp15_cat	197780	0.737065	93104	Stack_TargetEnc_v3	discard — CatBoost overfit in 5-fold, best remains exp14
+exp16_mlp	186781	0.765497	92619	Stack_MLP_10fold	discard — tied with exp14, no gain from MLP+10fold

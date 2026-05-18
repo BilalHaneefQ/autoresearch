@@ -22,3 +22,4 @@ dev/
 # Results file
 results.tsv
 catboost_info/
+saved_models/*.pkl
